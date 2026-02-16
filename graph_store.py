@@ -711,6 +711,187 @@ class GraphStore:
 
             return communities
 
+    # ─── Conversation Community Detection ─────────────────────────
+
+    async def detect_conversation_communities(
+        self, conversation_id: str, algorithm: str = "leiden"
+    ) -> dict[int, list[str]]:
+        """
+        Run community detection on a conversation subgraph.
+
+        Projects Message nodes (filtered by conversation_id) and their
+        REPLIES_TO relationships, plus optional MENTIONS links to Entity
+        nodes and EXHIBITS_TACTIC links to TacticalMove nodes, into a
+        GDS in-memory graph. Then runs the specified community detection
+        algorithm (Leiden by default) to cluster messages into sections.
+
+        Returns:
+            A mapping of community_id → list of message IDs.
+        """
+        graph_name = f"conversation_{conversation_id}"
+
+        async with self._session() as session:
+            # Drop any existing projection with the same name
+            try:
+                await session.run(
+                    "CALL gds.graph.drop($name, false)",
+                    name=graph_name,
+                )
+            except Exception:
+                pass
+
+            # Project the conversation subgraph using Cypher projection.
+            # We include Message nodes connected by REPLIES_TO, plus
+            # connections through shared Entity mentions (Message-MENTIONS->Entity<-MENTIONS-Message)
+            # to capture topical similarity.
+            await session.run(
+                """
+                CALL gds.graph.project.cypher(
+                    $graph_name,
+                    'MATCH (m:Message {conversation_id: $conv_id}) RETURN id(m) AS id',
+                    'MATCH (m1:Message {conversation_id: $conv_id})-[:REPLIES_TO]->(m2:Message {conversation_id: $conv_id})
+                     RETURN id(m1) AS source, id(m2) AS target, 1.0 AS weight
+                     UNION
+                     MATCH (m1:Message {conversation_id: $conv_id})-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(m2:Message {conversation_id: $conv_id})
+                     WHERE id(m1) < id(m2)
+                     RETURN id(m1) AS source, id(m2) AS target, 1.0 AS weight',
+                    {parameters: {conv_id: $conv_id}}
+                )
+                """,
+                graph_name=graph_name,
+                conv_id=conversation_id,
+            )
+
+            # Run community detection
+            if algorithm == "leiden":
+                algo_call = """
+                CALL gds.leiden.write($graph_name, {
+                    writeProperty: 'conv_community',
+                    relationshipWeightProperty: 'weight'
+                })
+                """
+            else:
+                algo_call = """
+                CALL gds.louvain.write($graph_name, {
+                    writeProperty: 'conv_community',
+                    relationshipWeightProperty: 'weight'
+                })
+                """
+
+            await session.run(algo_call, graph_name=graph_name)
+
+            # Fetch the community assignments for messages in this conversation
+            result = await session.run(
+                """
+                MATCH (m:Message {conversation_id: $conv_id})
+                WHERE m.conv_community IS NOT NULL
+                RETURN m.conv_community AS community_id,
+                       collect(m.id) AS message_ids,
+                       count(m) AS size
+                ORDER BY size DESC
+                """,
+                conv_id=conversation_id,
+            )
+
+            communities: dict[int, list[str]] = {}
+            async for record in result:
+                comm_id = record["community_id"]
+                communities[comm_id] = sorted(
+                    record["message_ids"],
+                    key=lambda mid: int(mid.split("_")[-1]),
+                )
+
+            # Cleanup
+            try:
+                await session.run(
+                    "CALL gds.graph.drop($name, false)",
+                    name=graph_name,
+                )
+            except Exception:
+                pass
+
+            return communities
+
+    async def get_conversation_community_section_data(
+        self, conversation_id: str, message_ids: list[str]
+    ) -> dict:
+        """
+        Retrieve messages, tactics, entities, and feedback for a set of
+        message IDs within a conversation. Used by draft-conversation
+        when working from a conversation outline.
+
+        Returns:
+            {
+                "messages": [...],
+                "entity_relations": [...],
+                "message_ids": [...]
+            }
+        """
+        async with self._session() as session:
+            result = await session.run(
+                """
+                MATCH (m:Message {conversation_id: $conv_id})
+                WHERE m.id IN $msg_ids
+                OPTIONAL MATCH (m)-[:MENTIONS]->(e:Entity)
+                WITH m, collect(DISTINCT e.name) AS mentioned_entities
+                OPTIONAL MATCH (m)-[:EXHIBITS_TACTIC]->(t:TacticalMove)
+                WITH m, mentioned_entities,
+                     collect(t {.move_type, .evidence, .confidence}) AS tactics
+                OPTIONAL MATCH (f:Feedback {active: true})-[:APPLIES_TO]->(m)
+                WITH m, mentioned_entities, tactics,
+                     collect(f {.feedback_type, .instruction}) AS feedback
+                RETURN m.id AS id, m.speaker AS speaker, m.content AS content,
+                       m.turn_number AS turn, mentioned_entities, tactics, feedback
+                ORDER BY m.turn_number
+                """,
+                conv_id=conversation_id,
+                msg_ids=message_ids,
+            )
+
+            messages = []
+            all_entity_names = set()
+            async for record in result:
+                mentioned = record["mentioned_entities"]
+                all_entity_names.update(mentioned)
+                messages.append({
+                    "id": record["id"],
+                    "speaker": record["speaker"],
+                    "content": record["content"],
+                    "turn": record["turn"],
+                    "mentioned_entities": mentioned,
+                    "tactics": [
+                        dict(t) for t in record["tactics"]
+                        if t.get("move_type")
+                    ],
+                    "feedback": [
+                        dict(f) for f in record["feedback"]
+                        if f.get("feedback_type")
+                    ],
+                })
+
+            # Get entity relationships for mentioned entities
+            entity_relations = []
+            for name in all_entity_names:
+                neighborhood = await self.get_neighborhood(
+                    entity_name=name, hops=1, min_confidence=0.5
+                )
+                entity_relations.extend(neighborhood.get("relations", []))
+
+            # Deduplicate relations
+            seen = set()
+            unique_relations = []
+            for r in entity_relations:
+                key = (r["source"], r["target"], r["type"])
+                if key not in seen:
+                    seen.add(key)
+                    unique_relations.append(r)
+
+            return {
+                "messages": messages,
+                "entity_relations": unique_relations,
+                "message_ids": message_ids,
+            }
+
     # ─── Feedback Storage ─────────────────────────────────────────
 
     async def store_feedback(self, feedback: FeedbackNode) -> None:
