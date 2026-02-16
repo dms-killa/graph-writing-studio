@@ -12,7 +12,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ─── Entity Labels ────────────────────────────────────────────────────
@@ -57,6 +57,11 @@ class RelationshipType(str, Enum):
 
     # Generic fallback
     RELATED_TO = "RELATED_TO"
+
+    # Conversation relationships
+    REPLIES_TO = "REPLIES_TO"
+    MENTIONS = "MENTIONS"
+    EXHIBITS_TACTIC = "EXHIBITS_TACTIC"
 
 
 # ─── Core Models ──────────────────────────────────────────────────────
@@ -140,6 +145,88 @@ class Episode(BaseModel):
     raw_text: str = Field(
         description="The original text that was processed"
     )
+
+
+# ─── Conversation Models ─────────────────────────────────────────────
+
+class SpeakerRole(str, Enum):
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+
+
+class TacticalMoveType(str, Enum):
+    """Taxonomy of rhetorical/evasive tactics in conversation."""
+    PREMATURE_PLURALISM = "PREMATURE_PLURALISM"
+    BURDEN_SHIFTING = "BURDEN_SHIFTING"
+    PALTERING = "PALTERING"
+    RETROACTIVE_REFRAMING = "RETROACTIVE_REFRAMING"
+    FALSE_EQUIVALENCE = "FALSE_EQUIVALENCE"
+    MOTTE_AND_BAILEY = "MOTTE_AND_BAILEY"
+    STRATEGIC_OMISSION = "STRATEGIC_OMISSION"
+    NEUTRALITY_DISTORTION = "NEUTRALITY_DISTORTION"
+    EVASION = "EVASION"
+    DEFLECTION = "DEFLECTION"
+    HEDGING = "HEDGING"
+    SYCOPHANCY = "SYCOPHANCY"
+    TONE_POLICING = "TONE_POLICING"
+    APPEAL_TO_COMPLEXITY = "APPEAL_TO_COMPLEXITY"
+    OTHER = "OTHER"
+
+
+class TacticalMove(BaseModel):
+    """A classified rhetorical or evasive move within a message."""
+    move_type: TacticalMoveType
+    evidence: str = Field(
+        description="Quote or description supporting this classification",
+        max_length=500,
+    )
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+
+
+class Message(BaseModel):
+    """A single message in a conversation transcript."""
+    id: str = Field(description="Unique identifier (e.g., 'msg_001' or turn number)")
+    speaker: SpeakerRole
+    content: str = Field(description="Full text of the message")
+    timestamp: Optional[datetime] = None
+    entities_mentioned: list[str] = Field(
+        default_factory=list,
+        description="Entity names found in this message",
+    )
+    tactical_moves: list[TacticalMove] = Field(
+        default_factory=list,
+        description="Classified rhetorical moves in this message",
+    )
+
+
+class ConversationEpisode(BaseModel):
+    """
+    A conversation transcript ingested as a series of linked messages.
+
+    Extends the Episode concept for multi-turn conversations. Messages
+    are ordered and linked via REPLIES_TO relationships. Entities
+    extracted from messages are connected to both the message and the
+    global entity graph.
+    """
+    source_id: str = Field(description="Unique identifier for the conversation")
+    source_type: str = Field(default="conversation")
+    ingested_at: datetime = Field(default_factory=datetime.utcnow)
+    source_timestamp: Optional[datetime] = None
+    messages: list[Message] = Field(default_factory=list)
+    entities: list[Entity] = Field(
+        default_factory=list,
+        description="All entities extracted across the conversation",
+    )
+    raw_text: str = Field(description="The original transcript text")
+
+    @model_validator(mode="after")
+    def validate_message_order(self) -> "ConversationEpisode":
+        """Ensure messages have unique IDs."""
+        ids = [m.id for m in self.messages]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Duplicate message IDs found")
+        return self
 
 
 # ─── Feedback / Constraint Nodes ─────────────────────────────────────
