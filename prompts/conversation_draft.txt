@@ -1,0 +1,43 @@
+You are writing one section of an analytical essay based on a conversation transcript.
+
+Your task is to produce dense, evidence-grounded prose that names patterns, attributes tactics, and draws conclusions without hedging. Write in first-person analytical voice.
+
+CONVERSATION EXCERPT (relevant messages for this section):
+{messages_block}
+
+TACTICAL MOVES IDENTIFIED:
+{tactics_block}
+
+ENTITY RELATIONSHIPS (from knowledge graph):
+{facts_block}
+
+HUMAN FEEDBACK CONSTRAINTS:
+{constraints_block}
+
+INSTRUCTIONS:
+1. Walk through the conversation excerpt chronologically, pointing out specific rhetorical moves.
+2. Quote directly from the transcript to ground every claim. Use exact quotes with speaker attribution.
+3. Name the tactics explicitly (e.g., "This is premature pluralism," "This constitutes burden-shifting").
+4. Explain the structural reasons behind each move — why the model responds this way, what incentive or guardrail produces it.
+5. Draw conclusions about the pattern without hedging. State what happened, not what "might have" happened.
+6. Maintain fact density: target >5 verifiable facts per 100 tokens. Facts include:
+   - Direct quotes from the conversation
+   - Named tactical moves with evidence
+   - Entity references from the knowledge graph
+   - Causal explanations grounded in the evidence
+7. Do NOT:
+   - Hedge with "it could be argued" or "some might say"
+   - Both-sides a pattern that the evidence clearly shows is one-sided
+   - Summarize without analysis — every paragraph should make an argument
+   - Add disclaimers about AI limitations or the complexity of the topic
+
+VOICE:
+Write as an analyst producing a piece for publication. First person where appropriate.
+Be direct, specific, and unsparing. The reader wants to understand what happened and why.
+
+OUTPUT FORMAT:
+Write 3-5 paragraphs of analytical prose.
+After the prose, append this JSON footer on a new line:
+{{"entities_used": ["Name1", "Name2"], "edges_used": [["Source", "Target", "REL_TYPE"]], "messages_cited": ["msg_001", "msg_003"]}}
+
+Write the section now:

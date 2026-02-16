@@ -19,6 +19,7 @@ from typing import AsyncGenerator, Optional
 from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncSession
 
 from schema import (
+    ConversationEpisode,
     DensityReport,
     Entity,
     Episode,
@@ -193,6 +194,375 @@ class GraphStore:
 
         logger.info(f"Ingested episode '{episode.source_id}': {stats}")
         return stats
+
+    # ─── Conversation Ingestion ─────────────────────────────────────
+
+    async def ingest_conversation(self, episode: ConversationEpisode) -> dict:
+        """
+        Load a ConversationEpisode into Neo4j.
+
+        Creates Message nodes linked by REPLIES_TO, connects entities
+        mentioned in messages, and stores tactical move tags.
+        """
+        stats = {
+            "messages_created": 0,
+            "nodes_created": 0,
+            "nodes_merged": 0,
+            "rels_created": 0,
+            "tactics_stored": 0,
+        }
+
+        async with self._session() as session:
+            # 1. Create the Episode node
+            await session.run(
+                """
+                MERGE (ep:Episode {source_id: $source_id})
+                SET ep.source_type = 'conversation',
+                    ep.ingested_at = datetime($ingested_at),
+                    ep.source_timestamp = CASE
+                        WHEN $source_ts IS NOT NULL THEN datetime($source_ts)
+                        ELSE null
+                    END,
+                    ep.message_count = $msg_count,
+                    ep.raw_text_preview = left($raw_text, 500)
+                """,
+                source_id=episode.source_id,
+                ingested_at=episode.ingested_at.isoformat(),
+                source_ts=(
+                    episode.source_timestamp.isoformat()
+                    if episode.source_timestamp
+                    else None
+                ),
+                msg_count=len(episode.messages),
+                raw_text=episode.raw_text,
+            )
+
+            # 2. Create Message nodes and REPLIES_TO chain
+            prev_msg_id = None
+            for msg in episode.messages:
+                await session.run(
+                    """
+                    CREATE (m:Message {
+                        id: $msg_id,
+                        speaker: $speaker,
+                        content: $content,
+                        conversation_id: $conv_id,
+                        turn_number: $turn
+                    })
+                    WITH m
+                    MATCH (ep:Episode {source_id: $conv_id})
+                    CREATE (m)-[:PART_OF]->(ep)
+                    """,
+                    msg_id=msg.id,
+                    speaker=msg.speaker.value,
+                    content=msg.content,
+                    conv_id=episode.source_id,
+                    turn=int(msg.id.split("_")[-1]),
+                )
+                stats["messages_created"] += 1
+
+                # Link to previous message
+                if prev_msg_id is not None:
+                    await session.run(
+                        """
+                        MATCH (curr:Message {id: $curr_id, conversation_id: $conv_id})
+                        MATCH (prev:Message {id: $prev_id, conversation_id: $conv_id})
+                        CREATE (curr)-[:REPLIES_TO]->(prev)
+                        """,
+                        curr_id=msg.id,
+                        prev_id=prev_msg_id,
+                        conv_id=episode.source_id,
+                    )
+                    stats["rels_created"] += 1
+
+                prev_msg_id = msg.id
+
+                # 3. Store tactical moves as TacticalMove nodes
+                for tactic in msg.tactical_moves:
+                    await session.run(
+                        """
+                        MATCH (m:Message {id: $msg_id, conversation_id: $conv_id})
+                        CREATE (t:TacticalMove {
+                            move_type: $move_type,
+                            evidence: $evidence,
+                            confidence: $confidence
+                        })
+                        CREATE (m)-[:EXHIBITS_TACTIC]->(t)
+                        """,
+                        msg_id=msg.id,
+                        conv_id=episode.source_id,
+                        move_type=tactic.move_type.value,
+                        evidence=tactic.evidence,
+                        confidence=tactic.confidence,
+                    )
+                    stats["tactics_stored"] += 1
+
+            # 4. Upsert entities and link to messages
+            for entity in episode.entities:
+                result = await session.run(
+                    """
+                    MERGE (e:Entity {name: $name})
+                    ON CREATE SET
+                        e.label = $label,
+                        e.aliases = $aliases,
+                        e.aliases_text = $aliases_text,
+                        e.created_at = datetime(),
+                        e.updated_at = datetime()
+                    ON MATCH SET
+                        e.updated_at = datetime(),
+                        e.aliases = CASE
+                            WHEN size($aliases) > size(coalesce(e.aliases, []))
+                            THEN $aliases ELSE e.aliases
+                        END,
+                        e.aliases_text = CASE
+                            WHEN size($aliases) > size(coalesce(e.aliases, []))
+                            THEN $aliases_text ELSE e.aliases_text
+                        END
+                    RETURN e.created_at = e.updated_at AS is_new
+                    """,
+                    name=entity.name,
+                    label=entity.label.value,
+                    aliases=entity.aliases,
+                    aliases_text=" | ".join(entity.aliases),
+                )
+                record = await result.single()
+                if record and record["is_new"]:
+                    stats["nodes_created"] += 1
+                else:
+                    stats["nodes_merged"] += 1
+
+                # Link entity to episode
+                await session.run(
+                    """
+                    MATCH (e:Entity {name: $name})
+                    MATCH (ep:Episode {source_id: $source_id})
+                    MERGE (e)-[:EXTRACTED_FROM]->(ep)
+                    """,
+                    name=entity.name,
+                    source_id=episode.source_id,
+                )
+
+                # Create entity relationships
+                for rel in entity.relations:
+                    await session.run(
+                        f"""
+                        MATCH (src:Entity {{name: $src_name}})
+                        MATCH (tgt:Entity {{name: $tgt_name}})
+                        CREATE (src)-[r:{rel.relationship_type.value} {{
+                            context: $context,
+                            valid_from: CASE
+                                WHEN $valid_from IS NOT NULL
+                                THEN datetime($valid_from) ELSE null
+                            END,
+                            valid_to: CASE
+                                WHEN $valid_to IS NOT NULL
+                                THEN datetime($valid_to) ELSE null
+                            END,
+                            confidence: $confidence,
+                            episode_id: $episode_id
+                        }}]->(tgt)
+                        """,
+                        src_name=entity.name,
+                        tgt_name=rel.target_entity,
+                        context=rel.context,
+                        valid_from=(
+                            rel.valid_from.isoformat() if rel.valid_from else None
+                        ),
+                        valid_to=(
+                            rel.valid_to.isoformat() if rel.valid_to else None
+                        ),
+                        confidence=rel.confidence,
+                        episode_id=episode.source_id,
+                    )
+                    stats["rels_created"] += 1
+
+            # 5. Link entities to messages where they're mentioned
+            for msg in episode.messages:
+                for entity_name in msg.entities_mentioned:
+                    await session.run(
+                        """
+                        MATCH (m:Message {id: $msg_id, conversation_id: $conv_id})
+                        MATCH (e:Entity {name: $entity_name})
+                        MERGE (m)-[:MENTIONS]->(e)
+                        """,
+                        msg_id=msg.id,
+                        conv_id=episode.source_id,
+                        entity_name=entity_name,
+                    )
+                    stats["rels_created"] += 1
+
+        logger.info(f"Ingested conversation '{episode.source_id}': {stats}")
+        return stats
+
+    # ─── Conversation Queries ──────────────────────────────────────
+
+    async def get_conversation_thread(
+        self, conversation_id: str
+    ) -> list[dict]:
+        """Return all messages in a conversation, ordered by turn number."""
+        async with self._session() as session:
+            result = await session.run(
+                """
+                MATCH (m:Message {conversation_id: $conv_id})
+                OPTIONAL MATCH (m)-[:EXHIBITS_TACTIC]->(t:TacticalMove)
+                WITH m, collect(t {.move_type, .evidence, .confidence}) AS tactics
+                RETURN m.id AS id, m.speaker AS speaker, m.content AS content,
+                       m.turn_number AS turn, tactics
+                ORDER BY m.turn_number
+                """,
+                conv_id=conversation_id,
+            )
+            messages = []
+            async for record in result:
+                messages.append({
+                    "id": record["id"],
+                    "speaker": record["speaker"],
+                    "content": record["content"],
+                    "turn": record["turn"],
+                    "tactics": [dict(t) for t in record["tactics"] if t.get("move_type")],
+                })
+            return messages
+
+    async def get_message_context(
+        self, message_id: str, conversation_id: str, hops: int = 2
+    ) -> dict:
+        """
+        Return the subgraph around a message: nearby turns, linked entities,
+        tactical moves, and feedback.
+        """
+        async with self._session() as session:
+            # Get the message and surrounding messages
+            result = await session.run(
+                """
+                MATCH (center:Message {id: $msg_id, conversation_id: $conv_id})
+                OPTIONAL MATCH (center)-[:EXHIBITS_TACTIC]->(t:TacticalMove)
+                WITH center, collect(t {.move_type, .evidence, .confidence}) AS center_tactics
+
+                // Get surrounding messages via REPLIES_TO chain
+                OPTIONAL MATCH path = (center)-[:REPLIES_TO*1..{hops}]-(neighbor:Message)
+                WITH center, center_tactics, collect(DISTINCT neighbor) AS neighbors
+
+                // Get mentioned entities
+                OPTIONAL MATCH (center)-[:MENTIONS]->(e:Entity)
+                WITH center, center_tactics, neighbors, collect(DISTINCT e) AS entities
+
+                RETURN center {.id, .speaker, .content, .turn_number} AS message,
+                       center_tactics AS tactics,
+                       [n IN neighbors | n {.id, .speaker, .content, .turn_number}] AS nearby_messages,
+                       [e IN entities | e {.name, .label}] AS mentioned_entities
+                """.replace("{hops}", str(hops)),
+                msg_id=message_id,
+                conv_id=conversation_id,
+            )
+            record = await result.single()
+            if not record:
+                return {"message": None, "tactics": [], "nearby_messages": [], "mentioned_entities": []}
+
+            return {
+                "message": dict(record["message"]),
+                "tactics": [dict(t) for t in record["tactics"] if t.get("move_type")],
+                "nearby_messages": sorted(
+                    [dict(m) for m in record["nearby_messages"]],
+                    key=lambda m: m.get("turn_number", 0),
+                ),
+                "mentioned_entities": [dict(e) for e in record["mentioned_entities"]],
+            }
+
+    async def tag_message_feedback(
+        self,
+        message_id: str,
+        conversation_id: str,
+        feedback_type: str,
+        instruction: str,
+    ) -> None:
+        """
+        Tag a message with feedback (e.g., tactical classification).
+
+        This uses the existing Feedback node system but links to a Message node.
+        """
+        async with self._session() as session:
+            await session.run(
+                """
+                MATCH (m:Message {id: $msg_id, conversation_id: $conv_id})
+                CREATE (f:Feedback {
+                    feedback_type: $ftype,
+                    instruction: $instruction,
+                    created_at: datetime(),
+                    active: true
+                })
+                CREATE (f)-[:APPLIES_TO]->(m)
+                """,
+                msg_id=message_id,
+                conv_id=conversation_id,
+                ftype=feedback_type,
+                instruction=instruction,
+            )
+
+    async def get_conversation_section_data(
+        self, conversation_id: str, community_members: list[str]
+    ) -> dict:
+        """
+        Retrieve all messages, tactics, and entities relevant to a community
+        for conversation-based drafting.
+
+        Finds messages that mention any entity in the community, plus their
+        tactical tags and feedback.
+        """
+        async with self._session() as session:
+            result = await session.run(
+                """
+                // Find messages that mention community entities
+                MATCH (m:Message {conversation_id: $conv_id})-[:MENTIONS]->(e:Entity)
+                WHERE e.name IN $members
+                WITH DISTINCT m, collect(DISTINCT e.name) AS mentioned_entities
+                OPTIONAL MATCH (m)-[:EXHIBITS_TACTIC]->(t:TacticalMove)
+                WITH m, mentioned_entities,
+                     collect(t {.move_type, .evidence, .confidence}) AS tactics
+                OPTIONAL MATCH (f:Feedback {active: true})-[:APPLIES_TO]->(m)
+                WITH m, mentioned_entities, tactics,
+                     collect(f {.feedback_type, .instruction}) AS feedback
+                RETURN m.id AS id, m.speaker AS speaker, m.content AS content,
+                       m.turn_number AS turn, mentioned_entities, tactics, feedback
+                ORDER BY m.turn_number
+                """,
+                conv_id=conversation_id,
+                members=community_members,
+            )
+
+            messages = []
+            async for record in result:
+                messages.append({
+                    "id": record["id"],
+                    "speaker": record["speaker"],
+                    "content": record["content"],
+                    "turn": record["turn"],
+                    "mentioned_entities": record["mentioned_entities"],
+                    "tactics": [dict(t) for t in record["tactics"] if t.get("move_type")],
+                    "feedback": [dict(f) for f in record["feedback"] if f.get("feedback_type")],
+                })
+
+            # Also get entity relationships for community members
+            entity_relations = []
+            for member in community_members:
+                neighborhood = await self.get_neighborhood(
+                    entity_name=member, hops=1, min_confidence=0.5
+                )
+                entity_relations.extend(neighborhood.get("relations", []))
+
+            # Deduplicate relations
+            seen = set()
+            unique_relations = []
+            for r in entity_relations:
+                key = (r["source"], r["target"], r["type"])
+                if key not in seen:
+                    seen.add(key)
+                    unique_relations.append(r)
+
+            return {
+                "messages": messages,
+                "entity_relations": unique_relations,
+                "community_members": community_members,
+            }
 
     # ─── Neighborhood Queries ─────────────────────────────────────
 
