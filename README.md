@@ -77,7 +77,36 @@ python main.py draft --section 0
 # ollama run llama3.1:70b < drafts/section_0_prompt.txt
 ```
 
-### 7. Store feedback
+### 7. Conversation-Aware Outline
+
+For conversations, you can generate an outline based on message communities
+rather than entity communities. This clusters messages into sections by topic
+and conversational flow:
+
+```bash
+# Ingest a conversation first
+python main.py ingest --source samples/democratic_backsliding_chat.md --conversation
+
+# Generate a conversation outline (uses Leiden by default)
+python main.py outline-conversation democratic_backsliding_chat
+
+# Or use Louvain algorithm
+python main.py outline-conversation democratic_backsliding_chat --algorithm louvain
+```
+
+This produces `outline_conversation.json` mapping sections to message IDs.
+Then use `draft-conversation` to draft each section — it will automatically
+pick up the conversation outline:
+
+```bash
+python main.py draft-conversation --section 0 --conversation democratic_backsliding_chat
+python main.py draft-conversation --section 1 --conversation democratic_backsliding_chat
+```
+
+If no conversation outline exists, `draft-conversation` falls back to the
+entity-based `outline.json`.
+
+### 8. Store feedback
 
 ```bash
 python main.py feedback \
@@ -98,10 +127,16 @@ graph-writing-studio/
 ├── main.py                # CLI orchestrator
 ├── samples/               # Sample text files for testing
 │   ├── john_smith.txt
-│   └── sarah_chen.txt
+│   ├── sarah_chen.txt
+│   └── democratic_backsliding_chat.md
+├── tests/                 # Pytest test suite
+│   ├── conftest.py        # Shared fixtures and mock helpers
+│   ├── test_conversation_outline.py  # Unit tests for conversation outline
+│   └── test_integration.py           # Integration tests (requires Neo4j)
 ├── extractions/           # Auto-generated JSON from extraction runs
 ├── drafts/                # Auto-generated drafting prompts
-└── outline.json           # Auto-generated community outline
+├── outline.json           # Auto-generated entity community outline
+└── outline_conversation.json  # Auto-generated conversation outline
 ```
 
 ## Key Design Decisions
@@ -136,6 +171,26 @@ Edit the constants at the top of each module:
 | Temperature | `extractor.py` | `0.1` |
 | Neo4j URI | `graph_store.py` | `bolt://localhost:7687` |
 | Neo4j password | `graph_store.py` / `docker-compose.yml` | `graphstudio` |
+
+## Running Tests
+
+```bash
+# Install test dependencies
+pip install pytest pytest-asyncio
+
+# Run unit tests (no external services required)
+pytest tests/test_conversation_outline.py -v
+
+# Run integration tests (requires Neo4j via docker compose up -d)
+pytest tests/test_integration.py -v
+
+# Run all tests
+pytest -v
+```
+
+Unit tests mock all external dependencies (Neo4j, Ollama). Integration tests
+in `test_integration.py` require a running Neo4j instance and will be skipped
+automatically if Neo4j is not available.
 
 ## Next Steps
 

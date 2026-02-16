@@ -452,33 +452,144 @@ async def cmd_tag_message(args: argparse.Namespace):
     ))
 
 
-async def cmd_draft_conversation(args: argparse.Namespace):
-    """Draft an analytical essay section from a conversation community."""
-    outline_path = Path("outline.json")
-    if not outline_path.exists():
-        console.print("[red]No outline found. Run 'outline' first.[/red]")
-        return
-
-    communities = json.loads(outline_path.read_text())
-
-    if args.section >= len(communities):
-        console.print(f"[red]Section {args.section} doesn't exist (max: {len(communities) - 1})[/red]")
-        return
-
-    community = communities[args.section]
-    console.print(Panel(
-        f"Drafting conversation section {args.section}\n"
-        f"Entities: {', '.join(community['members'][:5])}...",
-        title="Conversation Drafting",
-    ))
+async def cmd_outline_conversation(args: argparse.Namespace):
+    """Run community detection on a conversation's message graph."""
+    conversation_id = args.conversation_id
 
     store = GraphStore()
 
-    # Get conversation-specific section data
-    section_data = await store.get_conversation_section_data(
-        conversation_id=args.conversation,
-        community_members=community["members"],
+    console.print(Panel(
+        f"Running conversation community detection on [bold]{conversation_id}[/bold]\n"
+        f"Algorithm: {args.algorithm}",
+        title="Conversation Outline Discovery",
+    ))
+
+    communities = await store.detect_conversation_communities(
+        conversation_id=conversation_id,
+        algorithm=args.algorithm,
     )
+
+    if not communities:
+        console.print(
+            "[yellow]No communities found. Ensure the conversation has been "
+            "ingested first.[/yellow]"
+        )
+        await store.close()
+        return
+
+    # Build the outline data structure
+    outline = {
+        "conversation_id": conversation_id,
+        "algorithm": args.algorithm,
+        "sections": [],
+    }
+
+    table = Table(title=f"Conversation Outline ({len(communities)} sections)")
+    table.add_column("Section", justify="right", style="bold")
+    table.add_column("Community", justify="right")
+    table.add_column("Messages", style="cyan")
+    table.add_column("Count", justify="right")
+
+    for i, (comm_id, message_ids) in enumerate(communities.items()):
+        outline["sections"].append({
+            "section_id": i,
+            "community_id": comm_id,
+            "message_ids": message_ids,
+            "size": len(message_ids),
+        })
+        table.add_row(
+            str(i),
+            str(comm_id),
+            ", ".join(message_ids[:6])
+            + (f" (+{len(message_ids) - 6} more)" if len(message_ids) > 6 else ""),
+            str(len(message_ids)),
+        )
+
+    console.print(table)
+
+    # Save the outline
+    outline_path = Path("outline_conversation.json")
+    outline_path.write_text(
+        json.dumps(outline, indent=2),
+        encoding="utf-8",
+    )
+    console.print(f"\n[dim]Saved conversation outline to {outline_path}[/dim]")
+    console.print(
+        "[dim]Use 'draft-conversation --section <N> --conversation "
+        f"{conversation_id}' to draft each section.[/dim]"
+    )
+
+    await store.close()
+
+
+async def cmd_draft_conversation(args: argparse.Namespace):
+    """Draft an analytical essay section from a conversation community."""
+    # Try conversation outline first, fall back to entity outline
+    conv_outline_path = Path("outline_conversation.json")
+    entity_outline_path = Path("outline.json")
+
+    use_conversation_outline = False
+    section_message_ids = None
+
+    if conv_outline_path.exists():
+        conv_outline = json.loads(conv_outline_path.read_text())
+        # Check if this outline matches the requested conversation
+        if conv_outline.get("conversation_id") == args.conversation:
+            sections = conv_outline.get("sections", [])
+            if args.section < len(sections):
+                section = sections[args.section]
+                section_message_ids = section["message_ids"]
+                use_conversation_outline = True
+                console.print(Panel(
+                    f"Drafting conversation section {args.section}\n"
+                    f"Messages: {', '.join(section_message_ids[:5])}"
+                    + ("..." if len(section_message_ids) > 5 else ""),
+                    title="Conversation Drafting (message-based outline)",
+                ))
+            else:
+                console.print(
+                    f"[red]Section {args.section} doesn't exist in conversation outline "
+                    f"(max: {len(sections) - 1})[/red]"
+                )
+                return
+
+    if not use_conversation_outline:
+        # Fall back to entity-based outline
+        if not entity_outline_path.exists():
+            console.print(
+                "[red]No outline found. Run 'outline-conversation' or 'outline' first.[/red]"
+            )
+            return
+
+        communities = json.loads(entity_outline_path.read_text())
+
+        if args.section >= len(communities):
+            console.print(
+                f"[red]Section {args.section} doesn't exist (max: {len(communities) - 1})[/red]"
+            )
+            return
+
+        community = communities[args.section]
+        console.print(Panel(
+            f"Drafting conversation section {args.section}\n"
+            f"Entities: {', '.join(community['members'][:5])}...",
+            title="Conversation Drafting (entity-based outline)",
+        ))
+
+    store = GraphStore()
+
+    if use_conversation_outline:
+        # Use message-ID-based section data
+        section_data = await store.get_conversation_community_section_data(
+            conversation_id=args.conversation,
+            message_ids=section_message_ids,
+        )
+    else:
+        # Use entity-based section data (original behavior)
+        section_data = await store.get_conversation_section_data(
+            conversation_id=args.conversation,
+            community_members=community["members"],
+        )
 
     # Also get general feedback
     feedback = await store.get_active_feedback()
@@ -499,7 +610,7 @@ async def cmd_draft_conversation(args: argparse.Namespace):
 
         messages = all_messages
         console.print(
-            f"[dim]No entity-linked messages found; using all {len(messages)} "
+            f"[dim]No messages found for this section; using all {len(messages)} "
             f"conversation messages.[/dim]"
         )
 
@@ -626,6 +737,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_outline = subparsers.add_parser("outline", help="Discover outline via community detection")
     p_outline.add_argument("--algorithm", default="louvain", choices=["louvain", "leiden"])
 
+    # outline-conversation
+    p_outline_conv = subparsers.add_parser(
+        "outline-conversation",
+        help="Discover conversation outline via message community detection",
+    )
+    p_outline_conv.add_argument(
+        "conversation_id",
+        help="Conversation source ID (as used during ingestion)",
+    )
+    p_outline_conv.add_argument(
+        "--algorithm", default="leiden", choices=["louvain", "leiden"],
+        help="Community detection algorithm (default: leiden)",
+    )
+
     # draft
     p_draft = subparsers.add_parser("draft", help="Generate a draft for a section")
     p_draft.add_argument("--section", type=int, required=True, help="Section index from outline")
@@ -687,6 +812,7 @@ def main():
     cmd_map = {
         "ingest": cmd_ingest,
         "outline": cmd_outline,
+        "outline-conversation": cmd_outline_conversation,
         "draft": cmd_draft,
         "feedback": cmd_feedback,
         "density": cmd_density,
