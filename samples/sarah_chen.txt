@@ -1,0 +1,26 @@
+Sarah Chen has been VP of Platform Infrastructure at Acme Corp since January 2022.
+She oversees a team of 12 engineers split across three squads: Core Platform 
+(led by John Smith), Developer Experience (led by Amy Torres), and SRE 
+(led by Kevin Okafor).
+
+Sarah was previously a Principal Engineer at CloudBase Systems where she 
+designed their multi-region deployment architecture. She holds a PhD in 
+Distributed Systems from MIT (2015).
+
+Under Sarah's leadership, the Platform team launched Project Aurora in 
+February 2023 to modernize Acme's infrastructure. The project has been her 
+primary focus, consuming roughly 60% of her bandwidth. She reports directly 
+to David Park, VP of Engineering, and presents quarterly updates to the CTO, 
+Maria Gonzalez.
+
+In November 2023, Sarah initiated a parallel effort called Project Beacon — 
+a developer portal to improve internal API discoverability. Amy Torres leads 
+Beacon day-to-day, with a target launch date of March 2024.
+
+Sarah is also an active speaker in the distributed systems community. She 
+gave a keynote at KubeCon North America 2023 on "Practical Service Mesh 
+Adoption" and is scheduled to speak at QCon London 2024 on migration patterns.
+
+Key concern as of January 2024: the Platform team is stretched thin across 
+Aurora and Beacon. Sarah has requested headcount approval for 3 additional 
+engineers, pending Q1 budget review with David Park.

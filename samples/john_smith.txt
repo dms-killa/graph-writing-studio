@@ -1,0 +1,25 @@
+John Smith joined Acme Corp as a Senior Engineer in March 2023, reporting to 
+Sarah Chen who leads the Platform Infrastructure team. He was previously at 
+Globex Industries for 4 years where he built their real-time data pipeline 
+using Apache Kafka and Flink.
+
+At Acme, John was assigned to Project Aurora — an initiative to migrate the 
+company's monolithic architecture to microservices. The project was originally 
+led by Marcus Williams but he transitioned to an advisory role in August 2023 
+when the scope expanded to include the API gateway rewrite.
+
+In October 2023, Project Aurora hit a major blocker: the vendor contract with 
+DataSync Inc. expired and renewal negotiations stalled over pricing. This 
+delayed the Phase 2 milestone (service mesh deployment) by approximately 6 weeks.
+Sarah escalated the issue to VP of Engineering David Park, who approved an 
+alternative vendor evaluation.
+
+By January 2024, the team had migrated to StreamCore as their data sync 
+provider. John led the integration effort and completed Phase 2 on February 15.
+The Phase 3 milestone (full production cutover) is currently scheduled for 
+Q2 2024, pending load testing results.
+
+John also mentors two junior engineers on the team: Lisa Nguyen (joined June 2023) 
+and Raj Patel (joined September 2023). Lisa has been focusing on the 
+observability stack (Prometheus + Grafana) while Raj handles the CI/CD pipeline 
+using GitHub Actions and ArgoCD.
