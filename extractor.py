@@ -133,33 +133,70 @@ def _parse_json_array(raw: str) -> list[dict]:
     - Markdown code fences
     - Trailing commas
     - Preamble text before the JSON
+    - Single object instead of array
+    - Preamble prose before the JSON
     """
+    import re
+
     text = raw.strip()
 
     # Strip markdown fences
     if "```" in text:
-        parts = text.split("```")
-        for part in parts:
-            part = part.strip()
-            if part.startswith("json"):
-                part = part[4:].strip()
-            if part.startswith("["):
-                text = part
-                break
-
-    # Find the JSON array
-    start = text.find("[")
-    end = text.rfind("]")
-    if start == -1 or end == -1:
-        raise ValueError(f"No JSON array found in response: {text[:200]}")
-
-    json_str = text[start : end + 1]
+        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+        if match:
+            text = match.group(1).strip()
 
     # Remove trailing commas before ] or }
-    import re
-    json_str = re.sub(r",\s*([}\]])", r"\1", json_str)
+    text = re.sub(r",\s*([}\]])", r"\1", text)
 
-    return json.loads(json_str)
+    # 1. Try direct parse of the whole (cleaned) text
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            return [parsed]
+        return []
+    except json.JSONDecodeError:
+        pass
+
+    # 2. Try to extract a JSON array [...]
+    start = text.find("[")
+    end = text.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        candidate = text[start : end + 1]
+        candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
+        try:
+            parsed = json.loads(candidate)
+            return parsed if isinstance(parsed, list) else [parsed]
+        except json.JSONDecodeError:
+            pass
+
+    # 3. Try to extract a single JSON object {...}
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidate = text[start : end + 1]
+        candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return [parsed]
+        except json.JSONDecodeError:
+            pass
+
+    # 4. Last-ditch: scrape every {...} object out individually
+    objs = re.findall(r"\{[^{}]*\}", text)
+    results = []
+    for obj_str in objs:
+        try:
+            results.append(json.loads(obj_str))
+        except json.JSONDecodeError:
+            continue
+    if results:
+        return results
+
+    raise ValueError(f"No JSON array found in response: {text[:200]}")
 
 
 # ─── Two-Pass Extraction ─────────────────────────────────────────────
@@ -187,7 +224,24 @@ async def extract_relations_raw(
         relationship_types=relationship_types,
     )
     raw = await _call_ollama(prompt)
-    return _parse_json_array(raw)
+    try:
+        relations = _parse_json_array(raw)
+    except ValueError as exc:
+        logger.warning(f"Failed to parse relations JSON: {exc}")
+        return []
+
+    # Filter out entries that would break Neo4j (missing or empty required fields)
+    valid = [
+        r for r in relations
+        if isinstance(r, dict)
+        and r.get("source_entity")
+        and r.get("target_entity")
+        and r.get("relationship_type")
+    ]
+    skipped = len(relations) - len(valid)
+    if skipped:
+        logger.warning(f"  Skipped {skipped} invalid relation(s) (missing source/target/type)")
+    return valid
 
 
 async def extract_episode(
