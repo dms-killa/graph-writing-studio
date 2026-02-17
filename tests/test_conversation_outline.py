@@ -40,6 +40,10 @@ class TestDetectConversationCommunities:
             call_count[0] += 1
             query_stripped = query.strip()
 
+            # count query - return non-zero so the function doesn't early-exit
+            if "count(m) AS cnt" in query_stripped:
+                return MockAsyncResult([{"cnt": 10}])
+
             # graph.drop calls - return empty
             if "gds.graph.drop" in query_stripped:
                 return MockAsyncResult([])
@@ -117,6 +121,8 @@ class TestDetectConversationCommunities:
 
         async def mock_run(query, **kwargs):
             queries_run.append(query.strip())
+            if "count(m) AS cnt" in query.strip():
+                return MockAsyncResult([{"cnt": 10}])
             if "m.conv_community" in query.strip():
                 return MockAsyncResult([
                     {"community_id": 0, "message_ids": ["msg_001"], "size": 1},
@@ -138,6 +144,8 @@ class TestDetectConversationCommunities:
 
         async def mock_run(query, **kwargs):
             queries_run.append(query.strip())
+            if "count(m) AS cnt" in query.strip():
+                return MockAsyncResult([{"cnt": 10}])
             if "m.conv_community" in query.strip():
                 return MockAsyncResult([
                     {"community_id": 0, "message_ids": ["msg_001"], "size": 1},
@@ -183,6 +191,8 @@ class TestDetectConversationCommunities:
 
         async def mock_run(query, **kwargs):
             queries_run.append(query.strip())
+            if "count(m) AS cnt" in query.strip():
+                return MockAsyncResult([{"cnt": 10}])
             if "m.conv_community" in query.strip():
                 return MockAsyncResult([])
             return MockAsyncResult([])
