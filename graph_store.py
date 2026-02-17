@@ -27,13 +27,9 @@ from schema import (
     Relation,
 )
 
+from config import NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD
+
 logger = logging.getLogger(__name__)
-
-# ─── Configuration ────────────────────────────────────────────────────
-
-NEO4J_URI = "bolt://localhost:7687"
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "graphstudio"
 
 
 # ─── Graph Store ──────────────────────────────────────────────────────

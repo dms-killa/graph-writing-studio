@@ -119,8 +119,10 @@ python main.py feedback \
 
 ```
 graph-writing-studio/
+├── .env.example           # Configuration template (copy to .env)
 ├── docker-compose.yml     # Neo4j + GDS plugin
 ├── requirements.txt
+├── config.py              # Centralized configuration (reads .env)
 ├── schema.py              # Pydantic models (Entity, Relation, Episode, etc.)
 ├── extractor.py           # Ollama extraction pipeline (two-pass)
 ├── graph_store.py         # Neo4j operations (ingest, query, community, feedback)
@@ -162,15 +164,24 @@ drafting prompt automatically includes active constraints.
 
 ## Configuration
 
-Edit the constants at the top of each module:
+All settings are read from a `.env` file in the project root. Copy the example
+and adjust for your environment:
 
-| Setting | File | Default |
-|---------|------|---------|
-| Ollama URL | `extractor.py` | `http://localhost:11434` |
-| Ollama model | `extractor.py` | `llama3.1:70b` |
-| Temperature | `extractor.py` | `0.1` |
-| Neo4j URI | `graph_store.py` | `bolt://localhost:7687` |
-| Neo4j password | `graph_store.py` / `docker-compose.yml` | `graphstudio` |
+```bash
+cp .env.example .env
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint |
+| `OLLAMA_MODEL` | `llama3.1:70b` | Model for extraction (use `8b` for speed) |
+| `OLLAMA_TEMPERATURE` | `0.1` | Low temperature for deterministic extraction |
+| `OLLAMA_TIMEOUT` | `300.0` | Request timeout in seconds |
+| `NEO4J_URI` | `bolt://localhost:7687` | Neo4j Bolt protocol endpoint |
+| `NEO4J_USER` | `neo4j` | Neo4j username |
+| `NEO4J_PASSWORD` | `graphstudio` | Neo4j password (match docker-compose.yml) |
+
+Environment variables take precedence over `.env` file values.
 
 ## Running Tests
 
