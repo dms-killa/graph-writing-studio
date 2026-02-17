@@ -30,22 +30,28 @@ from schema import (
 
 # ─── Helpers ───────────────────────────────────────────────────────────
 
-async def _neo4j_available() -> bool:
+def _check_neo4j_available() -> bool:
     """Check if Neo4j is running and accessible."""
+    async def _check():
+        try:
+            store = GraphStore()
+            async with store._session() as session:
+                result = await session.run("RETURN 1 AS n")
+                record = await result.single()
+                await store.close()
+                return record is not None
+        except Exception:
+            return False
+
     try:
-        store = GraphStore()
-        async with store._session() as session:
-            result = await session.run("RETURN 1 AS n")
-            record = await result.single()
-            await store.close()
-            return record is not None
+        return asyncio.run(_check())
     except Exception:
         return False
 
 
 # Skip all tests in this module if Neo4j isn't running
 pytestmark = pytest.mark.skipif(
-    not asyncio.get_event_loop().run_until_complete(_neo4j_available()),
+    not _check_neo4j_available(),
     reason="Neo4j not available at bolt://localhost:7687",
 )
 
