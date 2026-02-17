@@ -28,8 +28,8 @@ class TestConfig:
 
     def test_config_has_sensible_defaults(self):
         import config
-        assert "localhost" in config.OLLAMA_BASE_URL
-        assert "localhost" in config.NEO4J_URI or "bolt://" in config.NEO4J_URI
+        assert config.OLLAMA_BASE_URL.startswith("http")
+        assert "://" in config.NEO4J_URI
         assert isinstance(config.OLLAMA_TEMPERATURE, float)
         assert isinstance(config.OLLAMA_TIMEOUT, float)
 

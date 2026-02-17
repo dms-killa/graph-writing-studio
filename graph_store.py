@@ -659,7 +659,10 @@ class GraphStore:
                     'entity_graph',
                     source,
                     target,
-                    {relationshipProperties: {confidence: r.confidence}}
+                    {
+                        relationshipProperties: {confidence: r.confidence},
+                        undirectedRelationshipTypes: ['*']
+                    }
                 ) AS g
                 RETURN g.graphName
                 """
@@ -755,6 +758,7 @@ class GraphStore:
             )
 
             # Step 2: Project using Cypher aggregation (GDS 2.x+ compatible)
+            # Leiden/Louvain require undirected graphs.
             await session.run(
                 """
                 MATCH (source:Message {conversation_id: $conv_id})
@@ -762,7 +766,8 @@ class GraphStore:
                 WITH gds.graph.project(
                     $graph_name,
                     source,
-                    target
+                    target,
+                    {undirectedRelationshipTypes: ['*']}
                 ) AS g
                 RETURN g.graphName
                 """,
