@@ -580,11 +580,11 @@ class GraphStore:
         """
         time_filter = ""
         if active_only:
-            time_filter = "AND (r.valid_to IS NULL)"
+            time_filter = "AND (rel.valid_to IS NULL)"
 
         query = f"""
-        MATCH path = (start:Entity {{name: $name}})-[r*1..{hops}]-(neighbor:Entity)
-        WHERE ALL(rel IN relationships(path) 
+        MATCH path = (start:Entity {{name: $name}})-[*1..{hops}]-(neighbor:Entity)
+        WHERE ALL(rel IN relationships(path)
                   WHERE rel.confidence >= $min_conf {time_filter})
         WITH DISTINCT neighbor, relationships(path) AS rels
         UNWIND rels AS rel
@@ -643,7 +643,7 @@ class GraphStore:
         Requires the Graph Data Science plugin.
         """
         async with self._session() as session:
-            # Project the graph into GDS
+            # Project the graph into GDS using Cypher aggregation
             try:
                 await session.run(
                     "CALL gds.graph.drop('entity_graph', false)"
@@ -653,12 +653,15 @@ class GraphStore:
 
             await session.run(
                 """
-                CALL gds.graph.project(
+                MATCH (source:Entity)-[r]->(target:Entity)
+                WHERE r.confidence IS NOT NULL
+                WITH gds.graph.project(
                     'entity_graph',
-                    'Entity',
-                    '*',
-                    {relationshipProperties: 'confidence'}
-                )
+                    source,
+                    target,
+                    {relationshipProperties: {confidence: r.confidence}}
+                ) AS g
+                RETURN g.graphName
                 """
             )
 
@@ -736,23 +739,32 @@ class GraphStore:
             except Exception:
                 pass
 
-            # Project the conversation subgraph using Cypher projection.
+            # Project the conversation subgraph using Cypher aggregation.
             # We include Message nodes connected by REPLIES_TO, plus
             # connections through shared Entity mentions (Message-MENTIONS->Entity<-MENTIONS-Message)
             # to capture topical similarity.
+            #
+            # Step 1: Create temporary TOPIC_SIMILAR relationships for shared entity mentions
             await session.run(
                 """
-                CALL gds.graph.project.cypher(
+                MATCH (m1:Message {conversation_id: $conv_id})-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(m2:Message {conversation_id: $conv_id})
+                WHERE id(m1) < id(m2)
+                MERGE (m1)-[:TOPIC_SIMILAR]->(m2)
+                """,
+                conv_id=conversation_id,
+            )
+
+            # Step 2: Project using Cypher aggregation (GDS 2.x+ compatible)
+            await session.run(
+                """
+                MATCH (source:Message {conversation_id: $conv_id})
+                OPTIONAL MATCH (source)-[r:REPLIES_TO|TOPIC_SIMILAR]->(target:Message {conversation_id: $conv_id})
+                WITH gds.graph.project(
                     $graph_name,
-                    'MATCH (m:Message {conversation_id: $conv_id}) RETURN id(m) AS id',
-                    'MATCH (m1:Message {conversation_id: $conv_id})-[:REPLIES_TO]->(m2:Message {conversation_id: $conv_id})
-                     RETURN id(m1) AS source, id(m2) AS target, 1.0 AS weight
-                     UNION
-                     MATCH (m1:Message {conversation_id: $conv_id})-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(m2:Message {conversation_id: $conv_id})
-                     WHERE id(m1) < id(m2)
-                     RETURN id(m1) AS source, id(m2) AS target, 1.0 AS weight',
-                    {parameters: {conv_id: $conv_id}}
-                )
+                    source,
+                    target
+                ) AS g
+                RETURN g.graphName
                 """,
                 graph_name=graph_name,
                 conv_id=conversation_id,
@@ -762,15 +774,13 @@ class GraphStore:
             if algorithm == "leiden":
                 algo_call = """
                 CALL gds.leiden.write($graph_name, {
-                    writeProperty: 'conv_community',
-                    relationshipWeightProperty: 'weight'
+                    writeProperty: 'conv_community'
                 })
                 """
             else:
                 algo_call = """
                 CALL gds.louvain.write($graph_name, {
-                    writeProperty: 'conv_community',
-                    relationshipWeightProperty: 'weight'
+                    writeProperty: 'conv_community'
                 })
                 """
 
@@ -797,7 +807,7 @@ class GraphStore:
                     key=lambda mid: int(mid.split("_")[-1]),
                 )
 
-            # Cleanup
+            # Cleanup: drop GDS graph and temporary relationships
             try:
                 await session.run(
                     "CALL gds.graph.drop($name, false)",
@@ -805,6 +815,15 @@ class GraphStore:
                 )
             except Exception:
                 pass
+
+            # Remove temporary TOPIC_SIMILAR relationships
+            await session.run(
+                """
+                MATCH (m1:Message {conversation_id: $conv_id})-[r:TOPIC_SIMILAR]-(m2:Message)
+                DELETE r
+                """,
+                conv_id=conversation_id,
+            )
 
             return communities
 

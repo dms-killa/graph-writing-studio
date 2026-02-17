@@ -44,9 +44,9 @@ class TestDetectConversationCommunities:
             if "gds.graph.drop" in query_stripped:
                 return MockAsyncResult([])
 
-            # graph.project call - return empty
+            # graph.project call - return empty (native Cypher aggregation)
             if "gds.graph.project" in query_stripped:
-                return MockAsyncResult([])
+                return MockAsyncResult([{"graphName": "test"}])
 
             # algorithm write call - return empty
             if "gds.leiden.write" in query_stripped or "gds.louvain.write" in query_stripped:
@@ -56,6 +56,7 @@ class TestDetectConversationCommunities:
             if "m.conv_community" in query_stripped:
                 return MockAsyncResult(community_records)
 
+            # TOPIC_SIMILAR creation/cleanup and other queries
             return MockAsyncResult([])
 
         session.run = mock_run
