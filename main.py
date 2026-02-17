@@ -673,6 +673,15 @@ async def cmd_draft_conversation(args: argparse.Namespace):
         constraints_block=constraints_block,
     )
 
+    # Prepend global prompt if provided
+    if args.global_prompt:
+        global_prompt_path = Path(args.global_prompt)
+        if not global_prompt_path.exists():
+            console.print(f"[red]Error: global prompt file not found: {global_prompt_path}[/red]")
+            return
+        global_prompt_content = global_prompt_path.read_text(encoding="utf-8").rstrip()
+        drafting_prompt = global_prompt_content + "\n\n" + drafting_prompt
+
     console.print(Panel(drafting_prompt[:500] + "...", title="Prompt Preview"))
     console.print(
         f"\n[bold]Section stats:[/bold] {len(messages)} messages, "
@@ -796,6 +805,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_draftconv.add_argument(
         "--template", default=None,
         help="Path to custom prompt template file",
+    )
+    p_draftconv.add_argument(
+        "--global-prompt", default=None, metavar="FILE",
+        help="Path to a plain-text file whose contents are prepended to every section prompt",
     )
 
     # density
