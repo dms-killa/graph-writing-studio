@@ -32,14 +32,14 @@ from schema import (
     TacticalMoveType,
 )
 
+from config import (
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL as EXTRACTION_MODEL,
+    OLLAMA_TEMPERATURE as TEMPERATURE,
+    OLLAMA_TIMEOUT as REQUEST_TIMEOUT,
+)
+
 logger = logging.getLogger(__name__)
-
-# ─── Configuration ────────────────────────────────────────────────────
-
-OLLAMA_BASE_URL = "http://localhost:11434"
-EXTRACTION_MODEL = "llama3.1:70b"  # Use 70b for extraction quality; 8b for speed
-TEMPERATURE = 0.1  # Low temperature for deterministic extraction
-REQUEST_TIMEOUT = 300.0  # 70b can be slow on consumer hardware
 
 
 # ─── Prompt Templates ────────────────────────────────────────────────
@@ -208,10 +208,17 @@ async def extract_episode(
     raw_entities = await extract_entities_raw(text)
     logger.info(f"  Found {len(raw_entities)} candidate entities")
 
-    # Validate entity labels
+    # Validate entity labels, handling both dict and string formats from LLM
     valid_labels = {e.value for e in EntityLabel}
     cleaned_entities = []
     for e in raw_entities:
+        if isinstance(e, str):
+            # LLM returned a plain string instead of a dict
+            logger.info(f"  Converting string entity to dict: {e}")
+            e = {"name": e.strip(), "label": "CONCEPT", "aliases": []}
+        if not isinstance(e, dict):
+            logger.warning(f"  Skipping unexpected entity format: {type(e)} - {e}")
+            continue
         label = e.get("label", "").upper()
         if label not in valid_labels:
             logger.warning(f"  Skipping entity with invalid label: {e}")
@@ -530,10 +537,17 @@ async def extract_conversation(
     raw_entities = await extract_conversation_entities(text)
     logger.info(f"  Found {len(raw_entities)} candidate entities")
 
-    # Validate entity labels
+    # Validate entity labels, handling both dict and string formats from LLM
     valid_labels = {e.value for e in EntityLabel}
     cleaned_entities = []
     for e in raw_entities:
+        if isinstance(e, str):
+            # LLM returned a plain string instead of a dict
+            logger.info(f"  Converting string entity to dict: {e}")
+            e = {"name": e.strip(), "label": "CONCEPT", "aliases": []}
+        if not isinstance(e, dict):
+            logger.warning(f"  Skipping unexpected entity format: {type(e)} - {e}")
+            continue
         label = e.get("label", "").upper()
         if label not in valid_labels:
             logger.warning(f"  Skipping entity with invalid label: {e}")
