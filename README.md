@@ -1,5 +1,7 @@
 # Graph Writing Studio
 
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dms-killa/graph-writing-studio/blob/main/colab/graph_writing_studio_colab.ipynb)
+
 A local-first, graph-powered writing pipeline that extracts knowledge from
 documents, organizes it via community detection, and generates dense, factual
 prose — with human-in-the-loop feedback at every stage.
@@ -114,6 +116,49 @@ python main.py feedback \
     --entity "John Smith" \
     --instruction "Don't mention salary or compensation details"
 ```
+
+## Running in Google Colab (No GPU Required)
+
+You can run the full pipeline in the cloud with zero local setup — no GPU,
+Docker, or Neo4j installation needed.
+
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/dms-killa/graph-writing-studio/blob/main/colab/graph_writing_studio_colab.ipynb)
+
+The notebook (`colab/graph_writing_studio_colab.ipynb`) handles everything
+automatically:
+
+1. Installs Ollama and starts it as a background service
+2. Installs Neo4j Community Edition + the Graph Data Science plugin (no Docker)
+3. Clones this repo and installs Python dependencies
+4. Walks through the complete entity and conversation workflows
+
+### Model recommendations for CPU-only Colab instances
+
+| Model | Download size | CPU speed | Quality |
+|---|---|---|---|
+| `llama3.2:1b` | ~900 MB | Very fast | Basic |
+| `llama3.2:3b` | ~2 GB | Fast | **Good — recommended default** |
+| `phi3:mini` | ~2.3 GB | Fast | Good |
+| `llama3.1:8b` | ~5 GB | Slow on CPU | Better |
+| `llama3.1:70b` | ~40 GB | GPU only | Best |
+
+The notebook auto-detects whether a GPU is present and pre-selects the best
+model for your hardware. You can override this via the model dropdown form.
+
+### Persisting models across sessions
+
+Colab VMs reset on disconnect. Use **Step 12** of the notebook to symlink the
+Ollama model cache (`/root/.ollama/models`) to a folder in your Google Drive.
+Once done, pulled models survive session restarts so you only download them once.
+
+### Differences from the local setup
+
+| Feature | Local | Colab |
+|---|---|---|
+| Neo4j | Docker Compose | Installed directly via apt |
+| GPU | Optional | Optional (auto-detected) |
+| Drive persistence | Not needed | Step 12 of notebook |
+| Neo4j Browser | http://localhost:7474 | Via ngrok tunnel (Step 11) |
 
 ## Project Structure
 
