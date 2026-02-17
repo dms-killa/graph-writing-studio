@@ -731,6 +731,15 @@ class GraphStore:
         graph_name = f"conversation_{conversation_id}"
 
         async with self._session() as session:
+            # Early exit if no messages exist for this conversation
+            count_result = await session.run(
+                "MATCH (m:Message {conversation_id: $conv_id}) RETURN count(m) AS cnt",
+                conv_id=conversation_id,
+            )
+            count_record = await count_result.single()
+            if not count_record or count_record["cnt"] == 0:
+                return {}
+
             # Drop any existing projection with the same name
             try:
                 await session.run(
