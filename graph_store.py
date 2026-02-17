@@ -659,10 +659,8 @@ class GraphStore:
                     'entity_graph',
                     source,
                     target,
-                    {
-                        relationshipProperties: {confidence: r.confidence},
-                        undirectedRelationshipTypes: ['*']
-                    }
+                    {relationshipProperties: {confidence: r.confidence}},
+                    {undirectedRelationshipTypes: ['*']}
                 ) AS g
                 RETURN g.graphName
                 """
@@ -751,7 +749,7 @@ class GraphStore:
             await session.run(
                 """
                 MATCH (m1:Message {conversation_id: $conv_id})-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(m2:Message {conversation_id: $conv_id})
-                WHERE id(m1) < id(m2)
+                WHERE elementId(m1) < elementId(m2)
                 MERGE (m1)-[:TOPIC_SIMILAR]->(m2)
                 """,
                 conv_id=conversation_id,
@@ -759,14 +757,15 @@ class GraphStore:
 
             # Step 2: Project using Cypher aggregation (GDS 2.x+ compatible)
             # Leiden/Louvain require undirected graphs.
+            # The 4th parameter (dataConfig) is required by GDS — pass at minimum {}.
             await session.run(
                 """
-                MATCH (source:Message {conversation_id: $conv_id})
-                OPTIONAL MATCH (source)-[r:REPLIES_TO|TOPIC_SIMILAR]->(target:Message {conversation_id: $conv_id})
+                MATCH (source:Message {conversation_id: $conv_id})-[r:REPLIES_TO|TOPIC_SIMILAR]-(target:Message {conversation_id: $conv_id})
                 WITH gds.graph.project(
                     $graph_name,
                     source,
                     target,
+                    {},
                     {undirectedRelationshipTypes: ['*']}
                 ) AS g
                 RETURN g.graphName
